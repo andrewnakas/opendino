@@ -125,7 +125,9 @@ def features(backbone, x, patch_size: int):
 
 def train_probe(backbone, head, loader, loss_fn, device, iters: int, lr: float, patch_size: int, log_every=200):
     opt = torch.optim.AdamW(head.parameters(), lr=lr, weight_decay=1e-4)
-    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr, total_steps=iters, pct_start=0.05)
+    warm = max(1, iters // 20)   # linear warm-up for 5% of steps, then cosine to zero; safe for tiny runs
+    sched = torch.optim.lr_scheduler.LambdaLR(
+        opt, lambda i: (i + 1) / warm if i < warm else 0.5 * (1 + math.cos(math.pi * (i - warm) / max(1, iters - warm))))
     head.train()
     it = 0
     while it < iters:
