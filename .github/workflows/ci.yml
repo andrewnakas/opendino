@@ -14,8 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -33,15 +33,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
       - name: Install (CPU-only torch)
         run: |
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install -e ".[dev]"
+          pip install -e ".[dev]" h5py scipy
       - uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
@@ -69,3 +69,11 @@ jobs:
         run: |
           python -m opendino.eval --backbone opendino:runs/smoke/final.pt --train data/imagenette/train_128 --val data/imagenette/val_128 --workers 2
           python -m opendino.eval --backbone random:runs/smoke/final.pt --train data/imagenette/train_128 --val data/imagenette/val_128 --workers 2 --no-linear
+      - name: Dense eval (ADE20k linear probe, a few images)
+        run: |
+          curl -sSfL http://data.csail.mit.edu/places/ADEchallenge/ADEChallengeData2016.zip -o ade.zip
+          unzip -q ade.zip -d data/raw && rm ade.zip
+          python -m opendino.dense_eval ade20k --root data/raw/ADEChallengeData2016 --backbone opendino:runs/smoke/final.pt \
+            --crop 128 --iters 20 --batch 4 --workers 2 --limit 32 --val-limit 4
+          python -m opendino.dense_eval ade20k --root data/raw/ADEChallengeData2016 --backbone teacher:dinov2_s \
+            --crop 126 --iters 20 --batch 4 --workers 2 --limit 32 --val-limit 4

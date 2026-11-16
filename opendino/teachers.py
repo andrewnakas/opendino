@@ -33,7 +33,8 @@ class TimmBackbone(nn.Module):
         if grid is not None:
             kwargs["img_size"] = grid * self.patch_size
         del probe
-        self.model = timm.create_model(timm_id, pretrained=pretrained, num_classes=0, **kwargs)
+        # dynamic_img_size lets one backbone run at any multiple of its patch size (dense evals use 512 px)
+        self.model = timm.create_model(timm_id, pretrained=pretrained, num_classes=0, dynamic_img_size=True, **kwargs)
         cfg = self.model.pretrained_cfg
         self.register_buffer("mean", torch.tensor(cfg["mean"]).view(1, 3, 1, 1), persistent=False)
         self.register_buffer("std", torch.tensor(cfg["std"]).view(1, 3, 1, 1), persistent=False)
