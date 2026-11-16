@@ -81,10 +81,11 @@ os.chdir(SRC)
 OUT = "/kaggle/working"
 
 def find_input(name, kind="dir"):
-    """Locate a mounted input by its final path component (mount layout differs between Kaggle versions)."""
-    for depth in range(1, 6):
+    """Locate a mounted input whose path ends with `name` (one or more components, e.g. "Data/CLS-LOC").
+    The mount layout differs between Kaggle versions, so search a few levels deep."""
+    for depth in range(1, 7):
         hits = sorted(glob.glob("/kaggle/input/" + "/".join(["*"] * depth)))
-        hits = [h for h in hits if os.path.basename(h) == name and (os.path.isdir(h) if kind == "dir" else os.path.isfile(h))]
+        hits = [h for h in hits if h.endswith("/" + name) and (os.path.isdir(h) if kind == "dir" else os.path.isfile(h))]
         if hits:
             return hits[0]
     raise FileNotFoundError(f"input {name!r} not found under /kaggle/input")
@@ -137,11 +138,11 @@ def job_shards(a):
     num_parts = a.num_parts or (default_parts if a.split == "train" else 1)
     name = f"{a.set}_{a.split}_{RES}" + (f"_p{a.part}" if a.split == "train" else "")
     if a.split == "train":
-        src = 'find_input("CLS-LOC") + "/train"'
+        src = 'find_input("Data/CLS-LOC") + "/train"'
         extra = ""
     else:
-        src = 'find_input("CLS-LOC") + "/val"'
-        extra = ', "--val-csv", find_input("LOC_val_solution.csv", "file"), "--classes-from", find_input("CLS-LOC") + "/train"'
+        src = 'find_input("Data/CLS-LOC") + "/val"'
+        extra = ', "--val-csv", find_input("LOC_val_solution.csv", "file"), "--classes-from", find_input("Data/CLS-LOC") + "/train"'
     body = f'''
 sh(sys.executable, "scripts/make_shards.py", "--src", {src}, "--out", OUT + "/{name}", "--res", {RES},
    "--quality", 90, "--workers", os.cpu_count(), "--class-stride", {stride},
