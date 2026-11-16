@@ -72,11 +72,14 @@ class TeacherCache:
         for f in fits[1:]:
             if not np.array_equal(f["pca_components"], fits[0]["pca_components"]):
                 raise ValueError("cache parts were built with different PCA fits")
+        # Parts must be contiguous. They may start anywhere (a worker can load a slice of the
+        # dataset); row i of this reader is global row self.base + i.
         starts = [m.get("start", 0) for m in metas]
-        expected = np.cumsum([0] + [m["num_images"] for m in metas[:-1]]).tolist()
+        self.base = starts[0]
+        expected = (self.base + np.cumsum([0] + [m["num_images"] for m in metas[:-1]])).tolist()
         if starts != expected:
             raise ValueError(f"cache parts are not contiguous: starts {starts}, expected {expected}")
-        self.starts = np.asarray(starts)
+        self.starts = np.asarray(starts) - self.base
         n = self.meta["num_images"]
         c1 = sum(np.asarray(m["cls_sum"], dtype=np.float64) for m in metas)
         c2 = sum(np.asarray(m["cls_sq"], dtype=np.float64) for m in metas)

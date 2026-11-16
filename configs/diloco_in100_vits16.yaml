@@ -1,0 +1,23 @@
+# DiLoCo pilot: ViT-S/16 on ImageNet-100, workers on any machine, coordinated through a HF repo.
+#   python -m opendino.diloco init --config configs/diloco_in100_vits16.yaml --repo nakas/opendino-run-pilot
+teachers:
+  dinov2_l: {weight: 1.0}
+  siglip2_l: {weight: 1.0}
+teacher_dims:                 # must match the caches (cls_dim = teacher width, patch_dim = PCA size)
+  dinov2_l: {cls_dim: 1024, patch_dim: 96}
+  siglip2_l: {cls_dim: 1024, patch_dim: 96}
+arch: vit_small
+patch_size: 16
+grid: 16
+batch_size: 64                # per worker per inner step (CPU runners)
+inner_steps: 100
+inner_lr: 1.0e-3
+inner_warmup: 10
+min_lr: 1.0e-5
+weight_decay: 0.05
+clip_grad: 3.0
+outer_lr: 0.7
+outer_momentum: 0.9
+total_rounds: 2000
+round_timeout_min: 45
+seed: 0

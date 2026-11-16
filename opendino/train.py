@@ -75,6 +75,39 @@ class DistillModel(nn.Module):
         return {name: head(cls, patch) for name, head in self.heads.items()}
 
 
+def build_model(cfg: dict, caches: dict[str, TeacherCache]) -> DistillModel:
+    student = Student(cfg["arch"], cfg["patch_size"], cfg["grid"] * cfg["patch_size"], cfg["reg_tokens"], cfg["drop_path"])
+    heads = nn.ModuleDict({n: Adaptor(student.embed_dim, c.cls_dim, c.patch_dim) for n, c in caches.items()})
+    return DistillModel(student, heads)
+
+
+def distill_step(net, img, targets, caches, weights, cfg, gen, dev, use_amp: bool):
+    """Augment one batch, run the student, and return (loss, per-teacher loss parts)."""
+    grid = cfg["grid"]
+    res = grid * cfg["patch_size"]
+    mean = torch.tensor(IMAGENET_MEAN, device=dev).view(1, 3, 1, 1)
+    std = torch.tensor(IMAGENET_STD, device=dev).view(1, 3, 1, 1)
+    b = img.shape[0]
+    theta = sample_views(b, grid, cfg["min_crop_frac"], generator=gen)
+    x = apply_view(img.to(dev, non_blocking=True).float() / 255.0, theta, (res, res))
+    if cfg["color_jitter"] > 0:
+        x = color_jitter(x, cfg["color_jitter"], generator=gen)
+    x = (x - mean) / std
+    mask = sample_mask(b, grid, cfg["mask_p"], tuple(cfg["mask_ratio"]), generator=gen).to(dev)
+    with torch.autocast("cuda", dtype=torch.float16, enabled=use_amp):
+        preds = net(x, mask)
+    loss, parts = 0.0, {}
+    for name, cache in caches.items():
+        t_cls, t_patch = cache.decode(targets[name][0].to(dev), targets[name][1].to(dev), cfg["whiten"])
+        t_patch = apply_view(t_patch.permute(0, 3, 1, 2), theta, (grid, grid)).permute(0, 2, 3, 1)
+        l = distill_loss(*preds[name], t_cls, t_patch)
+        loss = loss + weights[name] * (cfg["cls_weight"] * l["cls"] + cfg["patch_weight"] * l["patch"])
+        parts[f"{name}/cls"], parts[f"{name}/patch"] = l["cls"].item(), l["patch"].item()
+    if not torch.isfinite(loss):
+        raise RuntimeError(f"non-finite loss: {parts}")
+    return loss, parts
+
+
 def save_atomic(obj, path: Path) -> None:
     tmp = path.with_suffix(".tmp")
     torch.save(obj, tmp)
@@ -115,14 +148,11 @@ def main():
     steps_per_epoch = (len(ds) // world) // cfg["batch_size"]
     total_steps = steps_per_epoch * cfg["epochs"]
 
-    student = Student(cfg["arch"], cfg["patch_size"], grid * cfg["patch_size"], cfg["reg_tokens"], cfg["drop_path"])
-    heads = nn.ModuleDict({n: Adaptor(student.embed_dim, c.cls_dim, c.patch_dim) for n, c in caches.items()})
-    model = DistillModel(student, heads).to(dev)
+    model = build_model(cfg, caches).to(dev)
+    student, heads = model.student, model.heads
     opt = torch.optim.AdamW(param_groups([model], cfg["weight_decay"]), lr=cfg["lr"], betas=(0.9, 0.999))
     use_amp = dev.type == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
-    mean = torch.tensor(IMAGENET_MEAN, device=dev).view(1, 3, 1, 1)
-    std = torch.tensor(IMAGENET_STD, device=dev).view(1, 3, 1, 1)
 
     epoch = step_in_epoch = step = 0
     ckpt_path = out / "last.pt"
@@ -144,7 +174,6 @@ def main():
 
     log_f = open(out / "log.jsonl", "a") if main_proc else None
     gen = torch.Generator().manual_seed(cfg["seed"] * 1000 + rank + step)
-    res = grid * cfg["patch_size"]
     stop = False
     t_log, n_log = time.time(), 0
     net.train()
@@ -155,25 +184,7 @@ def main():
             for g in opt.param_groups:
                 g["lr"] = lr_at(step, total_steps, cfg)
             b = img.shape[0]
-            theta = sample_views(b, grid, cfg["min_crop_frac"], generator=gen)
-            x = apply_view(img.to(dev, non_blocking=True).float() / 255.0, theta, (res, res))
-            if cfg["color_jitter"] > 0:
-                x = color_jitter(x, cfg["color_jitter"], generator=gen)
-            x = (x - mean) / std
-            mask = sample_mask(b, grid, cfg["mask_p"], tuple(cfg["mask_ratio"]), generator=gen).to(dev)
-
-            with torch.autocast("cuda", dtype=torch.float16, enabled=use_amp):
-                preds = net(x, mask)
-            loss, parts = 0.0, {}
-            for name, cache in caches.items():
-                t_cls, t_patch = cache.decode(targets[name][0].to(dev), targets[name][1].to(dev), cfg["whiten"])
-                t_patch = apply_view(t_patch.permute(0, 3, 1, 2), theta, (grid, grid)).permute(0, 2, 3, 1)
-                l = distill_loss(*preds[name], t_cls, t_patch)
-                loss = loss + weights[name] * (cfg["cls_weight"] * l["cls"] + cfg["patch_weight"] * l["patch"])
-                parts[f"{name}/cls"], parts[f"{name}/patch"] = l["cls"].item(), l["patch"].item()
-
-            if not torch.isfinite(loss):
-                raise RuntimeError(f"non-finite loss at step {step}: {parts}")
+            loss, parts = distill_step(net, img, targets, caches, weights, cfg, gen, dev, use_amp)
             opt.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
             if cfg["clip_grad"]:

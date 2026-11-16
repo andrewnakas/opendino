@@ -196,3 +196,34 @@ def test_backbones_give_expected_grids_at_any_resolution():
             pooled, patch = bb.encode(torch.randint(0, 255, (1, 3, 64, 64), dtype=torch.uint8), grid)
             assert patch.shape[:3] == (1, grid, grid), (timm_id, grid, patch.shape)
             assert pooled.shape == (1, bb.embed_dim) and patch.shape[-1] == bb.embed_dim, timm_id
+
+
+def test_diloco_outer_step_matches_single_worker_sgd_and_averages():
+    from opendino.diloco import outer_step, pseudo_gradient
+    g = {"w": torch.tensor([1.0, 2.0]), "step": torch.tensor(3)}
+    local_a = {"w": torch.tensor([0.5, 2.5]), "step": torch.tensor(3)}
+    local_b = {"w": torch.tensor([1.5, 1.5]), "step": torch.tensor(3)}
+    da, db = pseudo_gradient(g, local_a), pseudo_gradient(g, local_b)
+    assert "step" not in da and torch.allclose(da["w"].float(), torch.tensor([0.5, -0.5]))
+    # lr 1, no momentum, one worker: the outer step lands exactly on that worker's weights
+    new, _ = outer_step(g, [da], None, lr=1.0, mu=0.0)
+    assert torch.allclose(new["w"], local_a["w"]) and new["step"] == 3
+    # two workers with opposite deltas average to no movement
+    new, m = outer_step(g, [da, db], None, lr=0.7, mu=0.9)
+    assert torch.allclose(new["w"], g["w"]) and torch.allclose(m["w"], torch.zeros(2))
+    # Nesterov momentum: second identical step moves further than the first
+    s1, m1 = outer_step(g, [da], None, lr=0.1, mu=0.9)
+    s2, _ = outer_step(s1, [da], m1, lr=0.1, mu=0.9)
+    assert ((s2["w"] - s1["w"]).abs() > (s1["w"] - g["w"]).abs()).all()
+
+
+def test_cache_slice_not_starting_at_zero(tmp_path):
+    n, grid, k, d = 6, 2, 4, 6
+    cls = np.random.randn(n, d).astype(np.float16)
+    white = np.random.randn(n, grid, grid, k).clip(-4, 4)
+    std = np.ones(k, dtype=np.float32)
+    _make_cache(tmp_path / "p2", cls[:3], white[:3], std, start=100)
+    _make_cache(tmp_path / "p3", cls[3:], white[3:], std, start=103)
+    c = TeacherCache([tmp_path / "p2", tmp_path / "p3"])
+    assert c.base == 100 and c.meta["num_images"] == 6
+    assert torch.equal(c.get(4)[0], torch.from_numpy(cls[4]))

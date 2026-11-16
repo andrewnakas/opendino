@@ -1,0 +1,90 @@
+name: diloco
+
+# Capped DiLoCo training burst on free GitHub runners. Worker 0 also coordinates.
+# Other machines (Kaggle, Colab, volunteers) can join the same run with `python -m opendino.diloco work`.
+#
+#   gh workflow run diloco.yml -f repo=nakas/opendino-run-pilot -f workers=4 -f hours=5
+#
+# Usage policy (GitHub Actions terms): bounded bursts, not a standing fleet. Default 4 runners,
+# hard maximum 8, at most one burst running at a time.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo: {description: "HF model repo of the run (created by `opendino.diloco init`)", required: true}
+      set: {description: "in100 | in1k", required: true, default: in100}
+      workers: {description: "runners in this burst (1-8)", required: true, default: "4"}
+      hours: {description: "hours per runner (max 5.5)", required: true, default: "5"}
+
+concurrency:
+  group: diloco
+  cancel-in-progress: false
+
+env:
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  SHARDS_REPO: nakas/opendino-shards
+  CACHES_REPO: nakas/opendino-caches
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - id: plan
+        env: {W: "${{ inputs.workers }}"}
+        run: |
+          W=$(( W < 1 ? 1 : (W > 8 ? 8 : W) ))
+          echo "matrix={\"worker\":[$(seq -s, 0 $((W-1)))]}" >> "$GITHUB_OUTPUT"
+          echo "W=$W"
+
+  work:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    env:
+      WORKER: ${{ matrix.worker }}
+      NWORK: ${{ strategy.job-total }}
+      SET: ${{ inputs.set }}
+      HOURS: ${{ inputs.hours }}
+      REPO: ${{ inputs.repo }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: {python-version: "3.12", cache: pip}
+      - name: Install (CPU-only torch)
+        run: |
+          pip install -q torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -q -e . huggingface_hub
+      - name: Download this worker's data slice
+        run: |
+          python - <<'EOF' > slice.env
+          import os
+          from huggingface_hub import HfApi
+          api, s, w, n = HfApi(), os.environ["SET"], int(os.environ["WORKER"]), int(os.environ["NWORK"])
+          files = api.list_repo_files(os.environ["SHARDS_REPO"], repo_type="dataset")
+          parts = sorted({f.split("/")[2] for f in files if f.startswith(f"{s}/train_256/part_")})
+          mine = parts[w * len(parts) // n:(w + 1) * len(parts) // n] or parts[w % len(parts):][:1]
+          print("PARTS=" + " ".join(mine))
+          EOF
+          cat slice.env
+          source slice.env
+          INC_S=(); INC_C=()
+          for p in $PARTS; do INC_S+=("$SET/train_256/$p/*"); INC_C+=("$SET/*/${p}_*/*"); done
+          hf download "$SHARDS_REPO" --repo-type dataset --include "${INC_S[@]}" --local-dir data
+          hf download "$CACHES_REPO" --repo-type dataset --include "${INC_C[@]}" --local-dir data
+          df -h . | tail -1
+      - name: Train
+        run: |
+          source slice.env
+          SHARDS=(); for p in $PARTS; do SHARDS+=("data/$SET/train_256/$p"); done
+          CACHE_ARGS=()
+          for t in $(ls "data/$SET" | grep -v train_256); do
+            CACHE_ARGS+=(--cache "$t=$(ls -d data/$SET/$t/part_* | sort | paste -sd, -)")
+          done
+          COORD=(); if [ "$WORKER" = 0 ]; then COORD=(--coordinator --expect "$NWORK"); fi
+          python -m opendino.diloco work --repo "$REPO" --worker "gh-$WORKER" --shards "${SHARDS[@]}" \
+            "${CACHE_ARGS[@]}" --hours "$HOURS" "${COORD[@]}"

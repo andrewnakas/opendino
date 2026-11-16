@@ -22,7 +22,7 @@ jobs:
       - name: Install (CPU-only torch)
         run: |
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install -e ".[dev]" h5py scipy
+          pip install -e ".[dev]" h5py scipy huggingface_hub
       - name: Unit tests
         run: pytest -q
 
@@ -41,7 +41,7 @@ jobs:
       - name: Install (CPU-only torch)
         run: |
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install -e ".[dev]" h5py scipy
+          pip install -e ".[dev]" h5py scipy huggingface_hub
       - uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
