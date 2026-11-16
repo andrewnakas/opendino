@@ -182,3 +182,17 @@ def test_knn_and_linear_on_separable_features():
     assert knn_accuracy(tf, ty, vf, vy) > 95
     assert linear_accuracy(tf, ty, vf, vy, "cpu", epochs=20, batch=128)["linear"] > 95
     assert knn_accuracy(tf, ty[torch.randperm(500, generator=g)], vf, vy) < 50  # shuffled labels -> near chance
+
+
+def test_backbones_give_expected_grids_at_any_resolution():
+    """Every architecture we train from or compare against must yield [B, g, g, D] patch grids."""
+    import pytest
+    from opendino.teachers import TEACHERS, TimmBackbone
+
+    ids = [TEACHERS["dinov2_s"], TEACHERS["siglip2_b"], "vit_small_patch16_dinov3.lvd1689m"]
+    for timm_id in ids:
+        bb = TimmBackbone(timm_id, pretrained=False).eval()
+        for grid in (8, 16, 32):
+            pooled, patch = bb.encode(torch.randint(0, 255, (1, 3, 64, 64), dtype=torch.uint8), grid)
+            assert patch.shape[:3] == (1, grid, grid), (timm_id, grid, patch.shape)
+            assert pooled.shape == (1, bb.embed_dim) and patch.shape[-1] == bb.embed_dim, timm_id
