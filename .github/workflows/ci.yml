@@ -1,0 +1,71 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install (CPU-only torch)
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev]" h5py scipy
+      - name: Unit tests
+        run: pytest -q
+
+  smoke:
+    # End-to-end pipeline on a tiny Imagenette subset: shard -> cache teacher -> train -> resume -> eval.
+    # CPU only, so it checks plumbing, not quality.
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install (CPU-only torch)
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev]"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-dinov2-s
+      - name: Data
+        run: |
+          mkdir -p data/raw && cd data/raw
+          curl -sSfL https://s3.amazonaws.com/fast-ai-imageclas/imagenette2-160.tgz | tar xz
+      - name: Shards
+        run: |
+          python scripts/make_shards.py --src data/raw/imagenette2-160/train --out data/imagenette/train_128 --res 128 --limit-per-class 60
+          python scripts/make_shards.py --src data/raw/imagenette2-160/val --out data/imagenette/val_128 --res 128 --limit-per-class 30
+      - name: Cache teacher (two parts, shared PCA)
+        run: |
+          python scripts/cache_teacher.py --shards data/imagenette/train_128 --teacher dinov2_s --grid 8 --pca-dim 64 --pca-images 300 --batch 50 --workers 2 --out data/imagenette/cache_dinov2_s_g8_p0 --end 300
+          python scripts/cache_teacher.py --shards data/imagenette/train_128 --teacher dinov2_s --grid 8 --batch 50 --workers 2 --out data/imagenette/cache_dinov2_s_g8_p1 --start 300 --pca-fit data/imagenette/cache_dinov2_s_g8_p0/pca_fit.npz
+      - name: Train, stop, resume
+        run: |
+          T='teachers={dinov2_s: {cache: [data/imagenette/cache_dinov2_s_g8_p0, data/imagenette/cache_dinov2_s_g8_p1]}}'
+          python -m opendino.train --config configs/smoke_imagenette.yaml "$T" epochs=2 batch_size=32 warmup_steps=5 max_steps=10
+          python -m opendino.train --config configs/smoke_imagenette.yaml "$T" epochs=2 batch_size=32 warmup_steps=5 | tee train.log
+          grep -q "resumed from" train.log
+          test -f runs/smoke/final.pt
+      - name: Eval (trained vs random init)
+        run: |
+          python -m opendino.eval --backbone opendino:runs/smoke/final.pt --train data/imagenette/train_128 --val data/imagenette/val_128 --workers 2
+          python -m opendino.eval --backbone random:runs/smoke/final.pt --train data/imagenette/train_128 --val data/imagenette/val_128 --workers 2 --no-linear

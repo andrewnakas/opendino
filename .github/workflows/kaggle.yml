@@ -1,0 +1,36 @@
+name: kaggle
+
+# Launch or inspect a job on Kaggle GPUs. Run from the Actions tab ("Run workflow") or:
+#   gh workflow run kaggle.yml -f args="shards --set in100 --split train"
+#   gh workflow run kaggle.yml -f args="status opendino-in100-shards-train"
+# Needs repo secrets KAGGLE_USERNAME and KAGGLE_KEY.
+
+on:
+  workflow_dispatch:
+    inputs:
+      args:
+        description: "arguments for scripts/kaggle.py (push is added automatically for job commands)"
+        required: true
+
+jobs:
+  kaggle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+      KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+      ARGS: ${{ inputs.args }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install kaggle pyyaml
+      - name: Run
+        run: |
+          read -ra A <<< "$ARGS"
+          case "${A[0]}" in
+            shards|cache|train|eval) python scripts/kaggle.py "${A[@]}" --push ;;
+            status|logs) python scripts/kaggle.py "${A[@]}" ;;
+            *) echo "unknown command ${A[0]}"; exit 1 ;;
+          esac

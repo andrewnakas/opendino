@@ -1,0 +1,15 @@
+# Mac smoke test: ViT-Tiny student, DINOv2 ViT-S teacher, Imagenette at a 8x8 token grid.
+# Proves the pipeline end to end; the numbers mean nothing about final quality.
+out: runs/smoke
+shards: data/imagenette/train_128
+teachers:
+  dinov2_s: {cache: data/imagenette/cache_dinov2_s_g8, weight: 1.0}
+arch: vit_tiny
+grid: 8
+epochs: 3
+batch_size: 64
+lr: 1.0e-3
+warmup_steps: 50
+workers: 2
+log_every: 10
+ckpt_every: 50

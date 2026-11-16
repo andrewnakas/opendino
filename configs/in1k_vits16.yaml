@@ -1,0 +1,20 @@
+# Phase 5: ViT-S/16 on ImageNet-1k, two teachers, 2x T4 on Kaggle.
+#   torchrun --nproc_per_node=2 -m opendino.train --config configs/in1k_vits16.yaml out=... shards=...
+# Paths are overridden on the command line in the Kaggle notebook.
+out: /kaggle/working/run_in1k_vits16
+shards: /kaggle/input/opendino-in1k-shards-256/train_256
+teachers:
+  dinov2_l: {cache: /kaggle/input/opendino-in1k-cache-dinov2-l/cache, weight: 1.0}
+  siglip2_l: {cache: /kaggle/input/opendino-in1k-cache-siglip2-l/cache, weight: 1.0}
+arch: vit_small
+patch_size: 16
+grid: 16
+drop_path: 0.05
+epochs: 100
+batch_size: 256          # per GPU
+lr: 1.5e-3
+warmup_steps: 5000
+workers: 4
+log_every: 100
+ckpt_every: 1000
+max_hours: 11.25         # stop cleanly before the 12 h Kaggle session limit

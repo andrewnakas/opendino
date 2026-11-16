@@ -1,0 +1,17 @@
+# Phase 4 pilot: ViT-S/16 on ImageNet-100 (100-class subset), used for the ablations.
+# Override per ablation, e.g. teachers=... mask_p=0 whiten=true
+out: /kaggle/working/pilot
+shards: /kaggle/input/opendino-in100-shards-256/train_256
+teachers:
+  dinov2_l: {cache: /kaggle/input/opendino-in100-cache-dinov2-l/cache, weight: 1.0}
+  siglip2_l: {cache: /kaggle/input/opendino-in100-cache-siglip2-l/cache, weight: 1.0}
+arch: vit_small
+grid: 16
+epochs: 100
+batch_size: 256
+lr: 1.5e-3
+warmup_steps: 1000
+workers: 4
+log_every: 50
+ckpt_every: 500
+max_hours: 11.25
