@@ -68,6 +68,9 @@ def main():
     ap.add_argument("--batch", type=int, default=128)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--max-hours", type=float, default=0, help="stop cleanly after this long (0 = no limit)")
+    ap.add_argument("--pca-only", action="store_true", help="only fit the PCA and write <out>/pca_fit.npz")
+    ap.add_argument("--index-offset", type=int, default=0,
+                    help="global index of row 0 of --shards, when they are one part of a larger dataset")
     a = ap.parse_args()
 
     t0 = time.time()
@@ -91,8 +94,11 @@ def main():
             shutil.copy(a.pca_fit, fit_path)
         else:
             np.savez(fit_path, **fit_pca(teacher, ds, dev, amp, loader_kw, a.pca_images, a.pca_dim))
+    if a.pca_only:
+        print(f"PCA fit written to {fit_path}")
+        return
     st = dict(np.load(fit_path))
-    pm = torch.from_numpy(st["pca_mean"]).to(dev)
+    pm =torch.from_numpy(st["pca_mean"]).to(dev)
     pc = torch.from_numpy(st["pca_components"]).to(dev)
     ps = torch.from_numpy(st["pca_std"]).to(dev)
     k, d = pc.shape
@@ -138,7 +144,7 @@ def main():
         return
 
     (out / "meta.json").write_text(json.dumps({
-        "teacher": a.teacher, "timm_id": TEACHERS[a.teacher], "grid": a.grid, "start": start, "num_images": n,
+        "teacher": a.teacher, "timm_id": TEACHERS[a.teacher], "grid": a.grid, "start": a.index_offset + start, "num_images": n,
         "cls_dim": int(teacher.embed_dim), "patch_token_dim": int(d), "pca_dim": int(k),
         "pca_explained": float(st["explained"]), "q_scale": Q_SCALE, "shards": [str(s) for s in a.shards],
         "cls_sum": c1.tolist(), "cls_sq": c2.tolist(),

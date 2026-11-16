@@ -27,6 +27,18 @@ gh workflow run kaggle.yml -f args="status opendino-in100-shards-train-p0"
 gh workflow run kaggle.yml -f args="logs opendino-in100-shards-train-p0"
 ```
 
+## GitHub swarm (data preparation on free runners)
+
+`swarm.yml` fans data preparation out over up to 20 free GitHub runners and stores results on Hugging Face
+(private image shards, public teacher caches). Bounded bursts only, per GitHub's Actions terms.
+
+```bash
+gh workflow run swarm.yml -f stage=shards -f set=in100 -f split=train -f workers=20
+gh workflow run swarm.yml -f stage=shards -f set=in100 -f split=validation -f workers=7
+gh workflow run swarm.yml -f stage=pca    -f set=in100 -f teacher=dinov2_l
+gh workflow run swarm.yml -f stage=cache  -f set=in100 -f teacher=dinov2_l
+```
+
 ## Pipeline (ImageNet-100 pilot; swap `in100` for `in1k`, which has 3 parts)
 
 | Step | `args` | Hardware |

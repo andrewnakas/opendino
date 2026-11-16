@@ -35,3 +35,14 @@ images themselves are not openly licensed. A fully open release requires Phase 6
 ## Dependencies
 
 PyTorch (BSD-3), torchvision (BSD-3), timm (Apache-2.0), NumPy (BSD-3), Pillow (MIT-CMU), PyYAML (MIT).
+
+## Storage and redistribution
+
+| Artifact | Where | Visibility | Reason |
+|---|---|---|---|
+| ImageNet image shards | HF dataset `nakas/opendino-shards` | **private** | ImageNet terms forbid redistributing the images |
+| Teacher caches (PCA-compressed features) | HF dataset `nakas/opendino-caches` | public | features, not images; public ImageNet embedding sets are common practice, but this is a grey area and will be revisited before any release |
+| Student checkpoints | HF model repo | public | Apache-2.0 release target |
+
+ImageNet source for the GitHub swarm: the gated `ILSVRC/imagenet-1k` dataset on Hugging Face, accessed with the
+maintainer's own token after accepting its terms.
