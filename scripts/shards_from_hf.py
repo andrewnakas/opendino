@@ -84,6 +84,9 @@ def main():
         "worker": a.worker, "workers": a.workers, "failed": failed}))
     print(f"wrote {len(labels)} images, {pos / 1e6:.1f} MB, {len(failed)} failed -> {out}")
 
+    if not labels or len(failed) > 0.01 * (len(labels) + len(failed)):
+        raise SystemExit(f"shard looks broken: {len(labels)} images written, {len(failed)} failed")
+
 
 if __name__ == "__main__":
     main()

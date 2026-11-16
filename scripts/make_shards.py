@@ -105,6 +105,9 @@ def main():
     for e in failed[:20]:
         print("FAILED", e)
 
+    if not labels or len(failed) > 0.01 * (len(labels) + len(failed)):
+        raise SystemExit(f"shard looks broken: {len(labels)} images written, {len(failed)} failed")
+
 
 if __name__ == "__main__":
     main()
