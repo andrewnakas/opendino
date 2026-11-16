@@ -3,7 +3,7 @@ name: kaggle
 # Launch or inspect a job on Kaggle GPUs. Run from the Actions tab ("Run workflow") or:
 #   gh workflow run kaggle.yml -f args="shards --set in100 --split train"
 #   gh workflow run kaggle.yml -f args="status opendino-in100-shards-train"
-# Needs repo secrets KAGGLE_USERNAME and KAGGLE_KEY.
+# Needs repo secrets KAGGLE_USERNAME plus KAGGLE_API_TOKEN (new-style token) or KAGGLE_KEY (legacy key).
 
 on:
   workflow_dispatch:
@@ -19,6 +19,7 @@ jobs:
     env:
       KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
       KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}   # newer-style Kaggle API token; preferred when set
       ARGS: ${{ inputs.args }}
     steps:
       - uses: actions/checkout@v4
