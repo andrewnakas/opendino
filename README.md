@@ -34,6 +34,7 @@ gh workflow run kaggle.yml -f args="logs opendino-in100-shards-train-p0"
 | 1. train shards | `shards --set in100 --split train` | CPU |
 | 2. val shards | `shards --set in100 --split val` | CPU |
 | 3. teacher caches | `cache --set in100 --teacher dinov2_l` and `... --teacher siglip2_l` | T4 |
+| 0. dense baselines (no ImageNet needed) | `dense --task ade20k --backbone timm:vit_small_patch16_dinov3.lvd1689m`; same with `--task nyu`; `teacher:dinov2_s` with `--crop 504` | T4 |
 | 4. baselines | `eval --set in100 --backbone teacher:dinov2_s` (any `timm:<id>` works) | T4 |
 | 5. train, segment 0 | `train --set in100 --config configs/pilot_in100_vits16.yaml --run pilot --segment 0` | 2×T4 |
 | 6. resume | same with `--segment 1`, `2`, ... until `final.pt` appears | 2×T4 |

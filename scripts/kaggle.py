@@ -222,6 +222,33 @@ sh(sys.executable, "-m", "opendino.eval", "--backbone", {spec}{grid}, "--pool", 
     return write_kernel(f"opendino-eval-{a.set}-{safe}", body, gpu=True, sources=sources, competition=False)
 
 
+ADE_URL = "http://data.csail.mit.edu/places/ADEchallenge/ADEChallengeData2016.zip"
+NYU_MAT = "http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/nyu_depth_v2_labeled.mat"
+NYU_SPLITS = "http://horatio.cs.nyu.edu/mit/silberman/indoor_seg_sup/splits.mat"
+
+
+def job_dense(a):
+    """ADE20k / NYUv2 linear probes. Downloads its own data, so no ImageNet access is needed."""
+    sources, spec = [], repr(a.backbone)
+    if a.backbone.startswith("opendino:"):   # opendino:<train kernel slug>
+        sources.append(a.backbone.split(":", 1)[1])
+        spec = '"opendino:" + find_input("run") + "/final.pt"'
+    if a.task == "ade20k":
+        data = (f'sh("curl", "-sSfL", "{ADE_URL}", "-o", "/tmp/ade.zip")\n'
+                'sh("unzip", "-q", "/tmp/ade.zip", "-d", "/tmp")\n'
+                'args = ["--root", "/tmp/ADEChallengeData2016"]\n')
+    else:
+        data = (f'sh("curl", "-sSfL", "{NYU_MAT}", "-o", "/tmp/nyu.mat")\n'
+                f'sh("curl", "-sSfL", "{NYU_SPLITS}", "-o", "/tmp/splits.mat")\n'
+                'args = ["--mat", "/tmp/nyu.mat", "--splits", "/tmp/splits.mat"]\n')
+    body = data + (
+        'sh(sys.executable, "-m", "pip", "install", "-q", "h5py", "scipy")\n'
+        f'sh(sys.executable, "-m", "opendino.dense_eval", "{a.task}", "--backbone", {spec}, *args,\n'
+        f'   "--crop", {a.crop}, "--iters", {a.iters}, "--batch", 16, "--workers", os.cpu_count())\n')
+    safe = a.backbone.replace(":", "-").replace("_", "-").replace(".", "-").replace("/", "-")[:40]
+    return write_kernel(f"opendino-dense-{a.task}-{safe}", body, gpu=True, sources=sources, competition=False)
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="job", required=True)
@@ -245,6 +272,12 @@ def main():
             p.add_argument("--backbone", required=True)
             p.add_argument("--grid", type=int, default=0)
             p.add_argument("--pool", default="cls")
+    p = sub.add_parser("dense")
+    p.add_argument("--task", choices=["ade20k", "nyu"], required=True)
+    p.add_argument("--backbone", required=True)
+    p.add_argument("--crop", type=int, default=512, help="use 504 (= 36 x 14) for patch-14 backbones")
+    p.add_argument("--iters", type=int, default=10000)
+    p.add_argument("--push", action="store_true")
     for name in ("status", "logs"):
         p = sub.add_parser(name)
         p.add_argument("slug")
@@ -263,7 +296,7 @@ def main():
                 print(f"===== {f.relative_to(out)}\n{f.read_text()[-20000:]}")
         return
 
-    d = {"shards": job_shards, "cache": job_cache, "train": job_train, "eval": job_eval}[a.job](a)
+    d = {"shards": job_shards, "cache": job_cache, "train": job_train, "eval": job_eval, "dense": job_dense}[a.job](a)
     print(f"kernel folder: {d}")
     if a.push:
         subprocess.run(["kaggle", "kernels", "push", "-p", str(d)], check=True)

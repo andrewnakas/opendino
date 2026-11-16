@@ -30,7 +30,7 @@ jobs:
         run: |
           read -ra A <<< "$ARGS"
           case "${A[0]}" in
-            shards|cache|train|eval) python scripts/kaggle.py "${A[@]}" --push ;;
+            shards|cache|train|eval|dense) python scripts/kaggle.py "${A[@]}" --push ;;
             status|logs) python scripts/kaggle.py "${A[@]}" ;;
             *) echo "unknown command ${A[0]}"; exit 1 ;;
           esac
