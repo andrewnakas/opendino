@@ -95,7 +95,8 @@ def sh(*cmd):
     subprocess.run([str(c) for c in cmd], check=True)
     print(f"[{(time.time() - t) / 60:.1f} min]", flush=True)
 
-print(subprocess.run(["nvidia-smi"], capture_output=True, text=True).stdout or "no GPU")
+import shutil
+print(subprocess.run(["nvidia-smi"], capture_output=True, text=True).stdout if shutil.which("nvidia-smi") else "no GPU", flush=True)
 '''
 
 
