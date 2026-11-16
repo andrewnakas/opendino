@@ -103,7 +103,15 @@ def job_script(body: str) -> str:
     return f"CODE = {code_tarball()!r}\n" + PRELUDE + "\n" + body
 
 
+def short_name(backbone: str) -> str:
+    """Compact, slug-safe backbone name: timm:vit_small_patch16_dinov3.lvd1689m -> small-patch16-dinov3."""
+    name = backbone.split(":", 1)[-1].split(".")[0]
+    return name.replace("_", "-").replace("/", "-").removeprefix("vit-")
+
+
 def write_kernel(slug: str, body: str, gpu: bool, sources: list[str], competition: bool = True) -> Path:
+    if len(slug) > 50:   # Kaggle kernel titles must be 5-50 characters
+        raise ValueError(f"kernel slug {slug!r} is {len(slug)} characters; Kaggle allows at most 50")
     d = ROOT / "build" / "kaggle" / slug
     d.mkdir(parents=True, exist_ok=True)
     (d / "job.py").write_text(job_script(body))
@@ -218,8 +226,7 @@ sh(sys.executable, "-m", "opendino.eval", "--backbone", {spec}{grid}, "--pool", 
    "--train", *[find_input(d) for d in {dirs!r}], "--val", find_input("{a.set}_val_{RES}"),
    "--workers", os.cpu_count())
 '''
-    safe = a.backbone.replace(":", "-").replace("_", "-").replace(".", "-").replace("/", "-")[:40]
-    return write_kernel(f"opendino-eval-{a.set}-{safe}", body, gpu=True, sources=sources, competition=False)
+    return write_kernel(f"opendino-eval-{a.set}-{short_name(a.backbone)}"[:50].rstrip("-"), body, gpu=True, sources=sources, competition=False)
 
 
 ADE_URL = "http://data.csail.mit.edu/places/ADEchallenge/ADEChallengeData2016.zip"
@@ -245,8 +252,7 @@ def job_dense(a):
         'sh(sys.executable, "-m", "pip", "install", "-q", "h5py", "scipy")\n'
         f'sh(sys.executable, "-m", "opendino.dense_eval", "{a.task}", "--backbone", {spec}, *args,\n'
         f'   "--crop", {a.crop}, "--iters", {a.iters}, "--batch", 16, "--workers", os.cpu_count())\n')
-    safe = a.backbone.replace(":", "-").replace("_", "-").replace(".", "-").replace("/", "-")[:40]
-    return write_kernel(f"opendino-dense-{a.task}-{safe}", body, gpu=True, sources=sources, competition=False)
+    return write_kernel(f"opendino-dense-{a.task}-{short_name(a.backbone)}"[:50].rstrip("-"), body, gpu=True, sources=sources, competition=False)
 
 
 def main():
