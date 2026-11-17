@@ -22,7 +22,6 @@ concurrency:
 
 env:
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
-  SHARDS_REPO: nakas/opendino-shards
   CACHES_REPO: nakas/opendino-caches
 
 jobs:
@@ -58,32 +57,44 @@ jobs:
       - name: Install (CPU-only torch)
         run: |
           pip install -q torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install -q -e . huggingface_hub
-      - name: Download this worker's data slice
+          pip install -q -e . huggingface_hub pyarrow
+      - name: Pick this worker's slices
         run: |
           python - <<'EOF' > slice.env
           import os
           from huggingface_hub import HfApi
-          api, s, w, n = HfApi(), os.environ["SET"], int(os.environ["WORKER"]), int(os.environ["NWORK"])
-          files = api.list_repo_files(os.environ["SHARDS_REPO"], repo_type="dataset")
-          parts = sorted({f.split("/")[2] for f in files if f.startswith(f"{s}/train_256/part_")})
+          s, w, n = os.environ["SET"], int(os.environ["WORKER"]), int(os.environ["NWORK"])
+          files = HfApi().list_repo_files(os.environ["CACHES_REPO"], repo_type="dataset")
+          teachers = sorted({f.split("/")[1] for f in files if f.startswith(f"{s}/") and f.count("/") >= 3})
+          # slice ids present for every teacher
+          per_t = [{int(f.split("/")[2].split("_")[1]) for f in files if f.startswith(f"{s}/{t}/part_")} for t in teachers]
+          parts = sorted(set.intersection(*per_t))
+          total = max(parts) + 1
           mine = parts[w * len(parts) // n:(w + 1) * len(parts) // n] or parts[w % len(parts):][:1]
-          print("PARTS=" + " ".join(mine))
+          print("TEACHERS='" + " ".join(teachers) + "'")
+          print("TOTAL=" + str(total))
+          print("PARTS='" + " ".join(map(str, mine)) + "'")
           EOF
           cat slice.env
+      - name: Rebuild image slices and download matching caches
+        run: |
           source slice.env
-          INC_S=(); INC_C=()
-          for p in $PARTS; do INC_S+=("$SET/train_256/$p/*"); INC_C+=("$SET/*/${p}_*/*"); done
-          hf download "$SHARDS_REPO" --repo-type dataset --include "${INC_S[@]}" --local-dir data
-          hf download "$CACHES_REPO" --repo-type dataset --include "${INC_C[@]}" --local-dir data
+          STRIDE=${{ inputs.set == 'in100' && '10' || '1' }}
+          for p in $PARTS; do
+            python scripts/shards_from_hf.py --split train --worker "$p" --workers "$TOTAL" \
+              --class-stride "$STRIDE" --out "data/shards/$(printf part_%03d $p)" --cache-dir /tmp/hfcache
+          done
+          INC=(); for t in $TEACHERS; do for p in $PARTS; do INC+=("$SET/$t/$(printf part_%03d $p)_*/*"); done; done
+          hf download "$CACHES_REPO" --repo-type dataset --include "${INC[@]}" --local-dir data/caches
           df -h . | tail -1
       - name: Train
         run: |
           source slice.env
-          SHARDS=(); for p in $PARTS; do SHARDS+=("data/$SET/train_256/$p"); done
+          SHARDS=(); for p in $PARTS; do SHARDS+=("data/shards/$(printf part_%03d $p)"); done
           CACHE_ARGS=()
-          for t in $(ls "data/$SET" | grep -v train_256); do
-            CACHE_ARGS+=(--cache "$t=$(ls -d data/$SET/$t/part_* | sort | paste -sd, -)")
+          for t in $TEACHERS; do
+            DIRS=""; for p in $PARTS; do DIRS="$DIRS$(ls -d data/caches/$SET/$t/$(printf part_%03d $p)_* | sort | paste -sd, -),"; done
+            CACHE_ARGS+=(--cache "$t=${DIRS%,}")
           done
           COORD=(); if [ "$WORKER" = 0 ]; then COORD=(--coordinator --expect "$NWORK"); fi
           python -m opendino.diloco work --repo "$REPO" --worker "gh-$WORKER" --shards "${SHARDS[@]}" \

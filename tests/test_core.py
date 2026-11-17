@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 
@@ -92,7 +93,7 @@ def _make_shard(root, n=12, res=32):
     (root / "meta.json").write_text(json.dumps({"res": res, "num_images": n}))
 
 
-def _make_cache(c, cls, white, std, start=0, components=None):
+def _make_cache(c, cls, white, std, start=0, components=None, labels=None):
     c.mkdir()
     n, grid, _, k = white.shape
     np.save(c / "cls.npy", cls)
@@ -103,7 +104,8 @@ def _make_cache(c, cls, white, std, start=0, components=None):
     c64 = cls.astype(np.float64)
     (c / "meta.json").write_text(json.dumps({
         "num_images": n, "start": start, "cls_dim": cls.shape[1], "pca_dim": k, "grid": grid,
-        "cls_sum": c64.sum(0).tolist(), "cls_sq": (c64 ** 2).sum(0).tolist()}))
+        "cls_sum": c64.sum(0).tolist(), "cls_sq": (c64 ** 2).sum(0).tolist(),
+        **({"labels_sha1": hashlib.sha1(np.asarray(labels, dtype=np.int32).tobytes()).hexdigest()} if labels is not None else {})}))
 
 
 def test_shard_and_cache_roundtrip(tmp_path):
@@ -149,8 +151,12 @@ def test_multipart_shards_and_caches_match_single(tmp_path):
         assert all(torch.equal(a, b) for a, b in zip(whole.get(i), split.get(i)))
     DistillDataset(parts, {"t": split})  # sizes agree
     import pytest
+    lab = np.concatenate([np.arange(5) % 3, np.arange(7) % 3])   # labels of shard_a then shard_b
+    _make_cache(tmp_path / "f0", cls[:5], white[:5], std, labels=lab[:5])
+    _make_cache(tmp_path / "f1", cls[5:], white[5:], std, labels=lab[5:])
+    DistillDataset(parts, {"t": TeacherCache([tmp_path / "f0", tmp_path / "f1"])})   # right order passes
     with pytest.raises(ValueError):
-        TeacherCache([tmp_path / "p1", tmp_path / "p0"])     # wrong order is rejected
+        DistillDataset(parts, {"t": TeacherCache([tmp_path / "f1", tmp_path / "f0"])})  # wrong order is rejected
     _make_cache(tmp_path / "other", cls[5:], white[5:], std, start=5, components=np.eye(k, 8, 1, dtype=np.float32))
     with pytest.raises(ValueError):
         TeacherCache([tmp_path / "p0", tmp_path / "other"])  # different PCA fits are rejected
@@ -225,5 +231,5 @@ def test_cache_slice_not_starting_at_zero(tmp_path):
     _make_cache(tmp_path / "p2", cls[:3], white[:3], std, start=100)
     _make_cache(tmp_path / "p3", cls[3:], white[3:], std, start=103)
     c = TeacherCache([tmp_path / "p2", tmp_path / "p3"])
-    assert c.base == 100 and c.meta["num_images"] == 6
+    assert c.meta["num_images"] == 6
     assert torch.equal(c.get(4)[0], torch.from_numpy(cls[4]))

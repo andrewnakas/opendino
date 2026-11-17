@@ -10,6 +10,7 @@ A cache part also stores the start index of the shard rows it covers in meta.jso
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -72,14 +73,10 @@ class TeacherCache:
         for f in fits[1:]:
             if not np.array_equal(f["pca_components"], fits[0]["pca_components"]):
                 raise ValueError("cache parts were built with different PCA fits")
-        # Parts must be contiguous. They may start anywhere (a worker can load a slice of the
-        # dataset); row i of this reader is global row self.base + i.
-        starts = [m.get("start", 0) for m in metas]
-        self.base = starts[0]
-        expected = (self.base + np.cumsum([0] + [m["num_images"] for m in metas[:-1]])).tolist()
-        if starts != expected:
-            raise ValueError(f"cache parts are not contiguous: starts {starts}, expected {expected}")
-        self.starts = np.asarray(starts) - self.base
+        # Parts are concatenated in the order given. Alignment with the image shards is checked by
+        # verify_labels (label fingerprints), so parts built independently on different machines
+        # can be combined without knowing global row offsets in advance.
+        self.starts = np.cumsum([0] + [m["num_images"] for m in metas[:-1]])
         n = self.meta["num_images"]
         c1 = sum(np.asarray(m["cls_sum"], dtype=np.float64) for m in metas)
         c2 = sum(np.asarray(m["cls_sq"], dtype=np.float64) for m in metas)
@@ -89,6 +86,16 @@ class TeacherCache:
         self.pca_std = torch.from_numpy(fits[0]["pca_std"]).float()
         self.cls_dim, self.patch_dim, self.grid = self.meta["cls_dim"], self.meta["pca_dim"], self.meta["grid"]
         self._cls = self._patch = None
+
+    def verify_labels(self, labels: np.ndarray) -> None:
+        """Check each part's labels_sha1 (if recorded) against the shard rows it is paired with."""
+        for r, start in zip(self.roots, self.starts):
+            m = json.loads((r / "meta.json").read_text())
+            if "labels_sha1" not in m:
+                continue
+            got = hashlib.sha1(labels[start:start + m["num_images"]].astype("int32").tobytes()).hexdigest()
+            if got != m["labels_sha1"]:
+                raise ValueError(f"cache part {r} does not match its shard rows (label fingerprint differs)")
 
     def get(self, i: int):
         if self._cls is None:
@@ -114,6 +121,7 @@ class DistillDataset(Dataset):
         for name, c in caches.items():
             if c.meta["num_images"] != len(self.images):
                 raise ValueError(f"cache {name} has {c.meta['num_images']} rows, shard has {len(self.images)}")
+            c.verify_labels(self.images.labels)
 
     def __len__(self) -> int:
         return len(self.images)

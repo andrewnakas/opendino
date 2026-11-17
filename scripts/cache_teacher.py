@@ -10,6 +10,7 @@ Pass 2 writes the summary token (float16) and whitened top-K PCA patch tokens (i
 Pass 2 is resumable: rerun the same command and it continues from the last flushed chunk.
 """
 import argparse
+import hashlib
 import json
 import shutil
 import time
@@ -148,6 +149,8 @@ def main():
         "cls_dim": int(teacher.embed_dim), "patch_token_dim": int(d), "pca_dim": int(k),
         "pca_explained": float(st["explained"]), "q_scale": Q_SCALE, "shards": [str(s) for s in a.shards],
         "cls_sum": c1.tolist(), "cls_sq": c2.tolist(),
+        # lets a reader verify that a (possibly rebuilt) shard has the same rows in the same order
+        "labels_sha1": hashlib.sha1(ds.labels[start:end].astype("int32").tobytes()).hexdigest(),
     }))
     prog_path.unlink()
     print(f"done: rows [{start}, {end}) -> {out}")

@@ -27,16 +27,19 @@ gh workflow run kaggle.yml -f args="status opendino-in100-shards-train-p0"
 gh workflow run kaggle.yml -f args="logs opendino-in100-shards-train-p0"
 ```
 
-## GitHub swarm (data preparation on free runners)
+## GitHub swarm and DiLoCo (free runners)
 
-`swarm.yml` fans data preparation out over up to 20 free GitHub runners and stores results on Hugging Face
-(private image shards, public teacher caches). Bounded bursts only, per GitHub's Actions terms.
+`swarm.yml` caches teacher targets across up to 20 free GitHub runners. Images are never stored: each
+runner rebuilds its slice of ImageNet from the gated `ILSVRC/imagenet-1k` files on Hugging Face (the
+build is deterministic), and every cache part records a label fingerprint that is checked when caches
+and images are paired again. Teacher caches (features only) go to the public HF dataset
+`nakas/opendino-caches`. Bounded bursts only, per GitHub's Actions terms.
 
 ```bash
-gh workflow run swarm.yml -f stage=shards -f set=in100 -f split=train -f workers=20
-gh workflow run swarm.yml -f stage=shards -f set=in100 -f split=validation -f workers=7
-gh workflow run swarm.yml -f stage=pca    -f set=in100 -f teacher=dinov2_l
-gh workflow run swarm.yml -f stage=cache  -f set=in100 -f teacher=dinov2_l
+gh workflow run swarm.yml -f stage=pca   -f set=in100 -f teacher=dinov2_l
+gh workflow run swarm.yml -f stage=cache -f set=in100 -f teacher=dinov2_l -f parts=20
+python -m opendino.diloco init --config configs/diloco_in100_vits16.yaml --repo nakas/opendino-run-pilot
+gh workflow run diloco.yml -f repo=nakas/opendino-run-pilot -f workers=4 -f hours=5
 ```
 
 ## Pipeline (ImageNet-100 pilot; swap `in100` for `in1k`, which has 3 parts)

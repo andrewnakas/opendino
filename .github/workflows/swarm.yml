@@ -1,35 +1,29 @@
 name: swarm
 
-# Fan data preparation out over many free GitHub runners; results go to Hugging Face.
-#   shards: build image shards from the gated ILSVRC/imagenet-1k Parquet files (private repo)
-#   pca:    fit one teacher's patch-token PCA on a few shard parts (public repo)
-#   cache:  cache one teacher's targets, one runner per shard part (or per sub-range)
+# Fan teacher caching out over many free GitHub runners; results go to a public Hugging Face dataset.
+# Image shards are never stored: each runner rebuilds its slice from the gated ILSVRC/imagenet-1k
+# Parquet files (deterministic), and each cache part carries a label fingerprint so a later rebuild
+# is verified to line up row for row.
 #
-#   gh workflow run swarm.yml -f stage=shards -f set=in100 -f split=train -f workers=20
-#   gh workflow run swarm.yml -f stage=shards -f set=in100 -f split=validation -f workers=7
-#   gh workflow run swarm.yml -f stage=pca    -f set=in100 -f teacher=dinov2_l
-#   gh workflow run swarm.yml -f stage=cache  -f set=in100 -f teacher=dinov2_l
+#   gh workflow run swarm.yml -f stage=pca   -f set=in100 -f teacher=dinov2_l
+#   gh workflow run swarm.yml -f stage=cache -f set=in100 -f teacher=dinov2_l -f parts=20
 #
 # Usage policy: bounded bursts only (GitHub's Actions terms forbid disproportionate use).
-# max-parallel caps concurrency; a run is a few hours, not a standing fleet.
-# Needs repo secret HF_TOKEN (write access to the two repos below).
+# Needs repo secret HF_TOKEN (gated ImageNet read + write to the caches repo).
 
 on:
   workflow_dispatch:
     inputs:
-      stage: {description: "shards | pca | cache", required: true}
+      stage: {description: "pca | cache", required: true}
       set: {description: "in100 | in1k", required: true, default: in100}
-      split: {description: "train | validation (shards stage)", required: false, default: train}
-      teacher: {description: "teacher name for pca/cache, e.g. dinov2_l", required: false, default: dinov2_l}
-      workers: {description: "shards stage: number of parts", required: false, default: "20"}
-      subsplits: {description: "cache stage: runners per shard part (use 2-3 for in1k to stay under 6 h)", required: false, default: "1"}
+      teacher: {description: "teacher name, e.g. dinov2_l or siglip2_l", required: true, default: dinov2_l}
+      parts: {description: "how many slices the training set is cut into (must match across stages)", required: false, default: "20"}
+      subsplits: {description: "cache stage: runners per slice (2-3 for in1k to stay under 6 h)", required: false, default: "1"}
 
 env:
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
-  SHARDS_REPO: nakas/opendino-shards      # private: contains ImageNet images
-  CACHES_REPO: nakas/opendino-caches      # public: teacher features only
+  CACHES_REPO: nakas/opendino-caches      # public: teacher features only, no images
   STRIDE: ${{ inputs.set == 'in100' && '10' || '1' }}
-  SPLIT_DIR: ${{ inputs.split == 'validation' && 'val_256' || 'train_256' }}
 
 jobs:
   plan:
@@ -37,29 +31,16 @@ jobs:
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
-      - run: pip install -q huggingface_hub
       - id: plan
-        env:
-          STAGE: ${{ inputs.stage }}
-          SET: ${{ inputs.set }}
-          WORKERS: ${{ inputs.workers }}
-          SUB: ${{ inputs.subsplits }}
+        env: {STAGE: "${{ inputs.stage }}", PARTS: "${{ inputs.parts }}", SUB: "${{ inputs.subsplits }}"}
         run: |
-          python - <<'EOF' >> "$GITHUB_OUTPUT"
+          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
           import json, os
-          from huggingface_hub import HfApi
-          api, stage = HfApi(), os.environ["STAGE"]
-          if stage == "shards":
-              api.create_repo(os.environ["SHARDS_REPO"], repo_type="dataset", private=True, exist_ok=True)
-              items = [{"part": i, "sub": 0} for i in range(int(os.environ["WORKERS"]))]
-          elif stage == "pca":
-              api.create_repo(os.environ["CACHES_REPO"], repo_type="dataset", private=False, exist_ok=True)
+          stage, parts, sub = os.environ["STAGE"], int(os.environ["PARTS"]), int(os.environ["SUB"])
+          if stage == "pca":
               items = [{"part": 0, "sub": 0}]
           elif stage == "cache":
-              files = api.list_repo_files(os.environ["SHARDS_REPO"], repo_type="dataset")
-              prefix = f"{os.environ['SET']}/train_256/"
-              parts = sorted({f[len(prefix):].split("/")[0] for f in files if f.startswith(prefix) and f.endswith("meta.json")})
-              items = [{"part": int(p.split("_")[1]), "sub": j} for p in parts for j in range(int(os.environ["SUB"]))]
+              items = [{"part": p, "sub": j} for p in range(parts) for j in range(sub)]
           else:
               raise SystemExit(f"unknown stage {stage}")
           print("matrix=" + json.dumps({"include": items}))
@@ -77,10 +58,9 @@ jobs:
       PART: ${{ matrix.part }}
       SUB: ${{ matrix.sub }}
       NSUB: ${{ inputs.subsplits }}
+      PARTS: ${{ inputs.parts }}
       SET: ${{ inputs.set }}
       TEACHER: ${{ inputs.teacher }}
-      WORKERS: ${{ inputs.workers }}
-      SPLIT: ${{ inputs.split }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -89,43 +69,26 @@ jobs:
         run: |
           pip install -q torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install -q -e . pyarrow huggingface_hub
-      - name: Throughput note
-        run: echo "runner has $(nproc) vCPUs, $(free -g | awk '/Mem/{print $2}') GB RAM, $(df -h . | awk 'NR==2{print $4}') free disk"
-
-      - name: Build shard part
-        if: inputs.stage == 'shards'
+          echo "runner: $(nproc) vCPUs, $(free -g | awk '/Mem/{print $2}') GB RAM, $(df -h . | awk 'NR==2{print $4}') free disk"
+      - name: Rebuild this slice of the training set
         run: |
-          P=$(printf "part_%03d" "$PART")
-          python scripts/shards_from_hf.py --split "$SPLIT" --worker "$PART" --workers "$WORKERS" \
-            --class-stride "$STRIDE" --out "out/$P" --cache-dir /tmp/hfcache
-          for i in 1 2 3 4 5; do hf upload "$SHARDS_REPO" "out/$P" "$SET/$SPLIT_DIR/$P" --repo-type dataset \
-            --commit-message "$SET $SPLIT_DIR $P" && break; sleep $((RANDOM % 60 + 30)); done
-
+          python scripts/shards_from_hf.py --split train --worker "$PART" --workers "$PARTS" \
+            --class-stride "$STRIDE" --out shard --cache-dir /tmp/hfcache
       - name: Fit PCA
         if: inputs.stage == 'pca'
         run: |
-          hf download "$SHARDS_REPO" --repo-type dataset --include "$SET/train_256/part_00[0-3]/*" --local-dir data
-          python scripts/cache_teacher.py --shards data/$SET/train_256/part_00* --teacher "$TEACHER" --pca-only \
-            --pca-images 4000 --batch 32 --workers 4 --out "pca/$TEACHER"
-          hf upload "$CACHES_REPO" "pca/$TEACHER/pca_fit.npz" "$SET/$TEACHER/pca_fit.npz" --repo-type dataset
-
-      - name: Cache teacher part
+          python -c "import huggingface_hub as h; h.HfApi().create_repo('$CACHES_REPO', repo_type='dataset', private=False, exist_ok=True)"
+          python scripts/cache_teacher.py --shards shard --teacher "$TEACHER" --pca-only \
+            --pca-images 4000 --batch 32 --workers 4 --out pca
+          ./scripts/hf_upload_retry.sh "$CACHES_REPO" pca/pca_fit.npz "$SET/$TEACHER/pca_fit.npz"
+      - name: Cache teacher targets
         if: inputs.stage == 'cache'
         run: |
-          P=$(printf "part_%03d" "$PART")
-          hf download "$SHARDS_REPO" --repo-type dataset --include "$SET/train_256/*/meta.json" "$SET/train_256/$P/*" --local-dir data
           hf download "$CACHES_REPO" --repo-type dataset --include "$SET/$TEACHER/pca_fit.npz" --local-dir pca
-          read OFFSET N <<< $(python -c "
-          import json, glob, os
-          metas = sorted(glob.glob('data/$SET/train_256/part_*/meta.json'))
-          sizes = [json.load(open(m))['num_images'] for m in metas]
-          i = [os.path.basename(os.path.dirname(m)) for m in metas].index('$P')
-          print(sum(sizes[:i]), sizes[i])")
+          N=$(python -c "import json; print(json.load(open('shard/meta.json'))['num_images'])")
           START=$(( N * SUB / NSUB )); END=$(( N * (SUB + 1) / NSUB ))
-          OUTNAME=$(printf "%s_%02d" "$P" "$SUB")
-          python scripts/cache_teacher.py --shards "data/$SET/train_256/$P" --teacher "$TEACHER" \
-            --pca-fit "pca/$SET/$TEACHER/pca_fit.npz" --start "$START" --end "$END" --index-offset "$OFFSET" \
-            --batch 32 --workers 4 --out "cache/$OUTNAME"
-          rm -f "cache/$OUTNAME/progress.json"
-          for i in 1 2 3 4 5; do hf upload "$CACHES_REPO" "cache/$OUTNAME" "$SET/$TEACHER/$OUTNAME" --repo-type dataset \
-            --commit-message "$SET $TEACHER $OUTNAME" && break; sleep $((RANDOM % 60 + 30)); done
+          NAME=$(printf "part_%03d_%02d" "$PART" "$SUB")
+          python scripts/cache_teacher.py --shards shard --teacher "$TEACHER" \
+            --pca-fit "pca/$SET/$TEACHER/pca_fit.npz" --start "$START" --end "$END" \
+            --batch 32 --workers 4 --out "cache/$NAME"
+          ./scripts/hf_upload_retry.sh "$CACHES_REPO" "cache/$NAME" "$SET/$TEACHER/$NAME"
