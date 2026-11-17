@@ -56,6 +56,8 @@ jobs:
       - name: Evaluate
         env: {BACKBONE: "${{ matrix.backbone }}", SLICES: "${{ inputs.train_slices }}"}
         run: |
+          set -o pipefail
           TRAIN=(); for p in $SLICES; do TRAIN+=("data/train_$p"); done
-          python -m opendino.eval --backbone "$BACKBONE" --train "${TRAIN[@]}" --val data/val | tee result.txt
+          # same 16x16 token grid for every model: 256 px for /16 models, 224 px for /14 models
+          python -m opendino.eval --backbone "$BACKBONE" --grid 16 --train "${TRAIN[@]}" --val data/val | tee result.txt
           echo "### $BACKBONE" >> "$GITHUB_STEP_SUMMARY"; tail -5 result.txt >> "$GITHUB_STEP_SUMMARY"

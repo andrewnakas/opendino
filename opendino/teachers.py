@@ -30,6 +30,7 @@ class TimmBackbone(nn.Module):
         kwargs = {}
         probe = timm.create_model(timm_id, pretrained=False, num_classes=0)
         self.patch_size = probe.patch_embed.patch_size[0]
+        native_grid = probe.patch_embed.grid_size[0]
         if grid is not None:
             kwargs["img_size"] = grid * self.patch_size
         del probe
@@ -39,7 +40,7 @@ class TimmBackbone(nn.Module):
         self.register_buffer("mean", torch.tensor(cfg["mean"]).view(1, 3, 1, 1), persistent=False)
         self.register_buffer("std", torch.tensor(cfg["std"]).view(1, 3, 1, 1), persistent=False)
         self.embed_dim = self.model.num_features
-        self.grid = grid
+        self.grid = grid or native_grid  # images are always resized to a multiple of the patch size
 
     def preprocess(self, x: torch.Tensor, grid: int | None = None) -> torch.Tensor:
         if x.dtype == torch.uint8:

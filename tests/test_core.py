@@ -246,3 +246,10 @@ def test_cache_patch_dims_truncation(tmp_path):
     assert torch.equal(cut.get(1)[1], full.get(1)[1][..., :2])
     _, p = cut.decode(*cut.get(1))
     assert p.shape == (grid, grid, 2)
+
+
+def test_timm_backbone_without_grid_resizes_to_patch_multiple():
+    from opendino.teachers import TimmBackbone
+    bb = TimmBackbone("vit_small_patch14_reg4_dinov2.lvd142m", pretrained=False).eval()
+    cls, patch = bb.encode(torch.zeros(1, 3, 256, 256, dtype=torch.uint8))
+    assert patch.shape[1] * bb.patch_size == bb.grid * bb.patch_size and patch.shape[1] == bb.grid
