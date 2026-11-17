@@ -65,7 +65,8 @@ class TeacherCache:
     from per-part sums stored in each part's meta.json.
     """
 
-    def __init__(self, roots):
+    def __init__(self, roots, patch_dims: int | None = None):
+        """patch_dims: use only the first k PCA components of the patch targets (default: all)."""
         self.roots = as_dirs(roots)
         metas = [json.loads((r / "meta.json").read_text()) for r in self.roots]
         self.meta = {**metas[0], "num_images": sum(m["num_images"] for m in metas)}
@@ -83,8 +84,9 @@ class TeacherCache:
         mean = c1 / n
         self.cls_mean = torch.from_numpy(mean).float()
         self.cls_scale = float(np.sqrt(np.clip(c2 / n - mean ** 2, 0, None).mean()))
-        self.pca_std = torch.from_numpy(fits[0]["pca_std"]).float()
-        self.cls_dim, self.patch_dim, self.grid = self.meta["cls_dim"], self.meta["pca_dim"], self.meta["grid"]
+        k = min(patch_dims or self.meta["pca_dim"], self.meta["pca_dim"])
+        self.pca_std = torch.from_numpy(fits[0]["pca_std"][:k]).float()
+        self.cls_dim, self.patch_dim, self.grid = self.meta["cls_dim"], k, self.meta["grid"]
         self._cls = self._patch = None
 
     def verify_labels(self, labels: np.ndarray) -> None:
@@ -102,7 +104,8 @@ class TeacherCache:
             self._cls = [np.load(r / "cls.npy", mmap_mode="r") for r in self.roots]
             self._patch = [np.load(r / "patch.npy", mmap_mode="r") for r in self.roots]
         p, j = _locate(self.starts, i)
-        return torch.from_numpy(np.array(self._cls[p][j])), torch.from_numpy(np.array(self._patch[p][j]))
+        patch = np.array(self._patch[p][j][..., :self.patch_dim])
+        return torch.from_numpy(np.array(self._cls[p][j])), torch.from_numpy(patch)
 
     def decode(self, cls: torch.Tensor, patch: torch.Tensor, whiten: bool = False):
         """Raw cached tensors (on any device) -> float training targets with about unit scale."""

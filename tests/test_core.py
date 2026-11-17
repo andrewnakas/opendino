@@ -233,3 +233,16 @@ def test_cache_slice_not_starting_at_zero(tmp_path):
     c = TeacherCache([tmp_path / "p2", tmp_path / "p3"])
     assert c.meta["num_images"] == 6
     assert torch.equal(c.get(4)[0], torch.from_numpy(cls[4]))
+
+
+def test_cache_patch_dims_truncation(tmp_path):
+    n, grid, k, d = 4, 2, 4, 6
+    cls = np.random.randn(n, d).astype(np.float16)
+    white = np.random.randn(n, grid, grid, k).clip(-4, 4)
+    std = np.array([4.0, 2.0, 1.0, 0.5], dtype=np.float32)
+    _make_cache(tmp_path / "c", cls, white, std)
+    full, cut = TeacherCache(tmp_path / "c"), TeacherCache(tmp_path / "c", patch_dims=2)
+    assert full.patch_dim == 4 and cut.patch_dim == 2 and cut.pca_std.numel() == 2
+    assert torch.equal(cut.get(1)[1], full.get(1)[1][..., :2])
+    _, p = cut.decode(*cut.get(1))
+    assert p.shape == (grid, grid, 2)

@@ -31,6 +31,7 @@ DEFAULTS = {
     "grid": 16,                  # student input = grid * patch_size
     "teachers": {},              # name -> {"cache": dir, "weight": 1.0}
     "whiten": False, "cls_weight": 1.0, "patch_weight": 1.0,
+    "patch_dims": None,          # use only the first k cached PCA components (None = all)
     "min_crop_frac": 0.5, "color_jitter": 0.4, "mask_p": 0.5, "mask_ratio": [0.1, 0.5],
     "epochs": 100, "batch_size": 256, "lr": 1e-3, "min_lr": 1e-6, "weight_decay": 0.05,
     "warmup_steps": 2000, "clip_grad": 3.0, "workers": 4, "seed": 0,
@@ -135,7 +136,7 @@ def main():
         out.mkdir(parents=True, exist_ok=True)
     torch.manual_seed(cfg["seed"] + rank)
 
-    caches = {n: TeacherCache(t["cache"]) for n, t in cfg["teachers"].items()}
+    caches = {n: TeacherCache(t["cache"], cfg["patch_dims"]) for n, t in cfg["teachers"].items()}
     weights = {n: float(t.get("weight", 1.0)) for n, t in cfg["teachers"].items()}
     grid = cfg["grid"]
     for n, c in caches.items():

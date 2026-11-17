@@ -3,9 +3,10 @@
 teachers:
   dinov2_l: {weight: 1.0}
   siglip2_l: {weight: 1.0}
-teacher_dims:                 # must match the caches (cls_dim = teacher width, patch_dim = PCA size)
-  dinov2_l: {cls_dim: 1024, patch_dim: 96}
-  siglip2_l: {cls_dim: 1024, patch_dim: 96}
+patch_dims: 256               # PCA components used from the caches (ablate with 96)
+teacher_dims:                 # cls_dim = teacher width, patch_dim = patch_dims
+  dinov2_l: {cls_dim: 1024, patch_dim: 256}
+  siglip2_l: {cls_dim: 1024, patch_dim: 256}
 arch: vit_small
 patch_size: 16
 grid: 16

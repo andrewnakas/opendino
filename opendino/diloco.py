@@ -145,7 +145,7 @@ def cmd_work(a):
     caches = {}
     for spec in a.cache:
         name, dirs = spec.split("=", 1)
-        caches[name] = TeacherCache(dirs.split(","))
+        caches[name] = TeacherCache(dirs.split(","), cfg.get("patch_dims"))
     weights = {n: float(cfg["teachers"].get(n, {}).get("weight", 1.0)) for n in caches}
     ds = DistillDataset(a.shards, caches)
     model = build_model(cfg, caches).to(dev)

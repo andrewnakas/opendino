@@ -18,7 +18,8 @@ on:
       set: {description: "in100 | in1k", required: true, default: in100}
       teacher: {description: "teacher name, e.g. dinov2_l or siglip2_l", required: true, default: dinov2_l}
       parts: {description: "how many slices the training set is cut into (must match across stages)", required: false, default: "20"}
-      subsplits: {description: "cache stage: runners per slice (2-3 for in1k to stay under 6 h)", required: false, default: "1"}
+      subsplits: {description: "cache stage: runners per slice (4 for in1k to stay under 6 h)", required: false, default: "1"}
+      pca_dim: {description: "pca stage: patch-token PCA components to keep", required: false, default: "256"}
 
 env:
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -79,7 +80,7 @@ jobs:
         run: |
           python -c "import huggingface_hub as h; h.HfApi().create_repo('$CACHES_REPO', repo_type='dataset', private=False, exist_ok=True)"
           python scripts/cache_teacher.py --shards shard --teacher "$TEACHER" --pca-only \
-            --pca-images 4000 --batch 32 --workers 4 --out pca
+            --pca-images 4000 --pca-dim "${{ inputs.pca_dim }}" --batch 32 --workers 4 --out pca
           ./scripts/hf_upload_retry.sh "$CACHES_REPO" pca/pca_fit.npz "$SET/$TEACHER/pca_fit.npz"
       - name: Cache teacher targets
         if: inputs.stage == 'cache'
