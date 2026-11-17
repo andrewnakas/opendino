@@ -104,8 +104,15 @@ jobs:
             python scripts/shards_from_hf.py --split train --worker "$p" --workers "$TOTAL" \
               --class-stride "$STRIDE" --out "data/shards/$(printf part_%03d $p)" --cache-dir /tmp/hfcache
           done
-          INC=(); for t in $TEACHERS; do for p in $PARTS; do INC+=("$SET/$t/$(printf part_%03d $p)_*/*"); done; done
-          hf download "$CACHES_REPO" --repo-type dataset --include "${INC[@]}" --local-dir data/caches
+          # (hf download treats a second --include value as a filename, so use snapshot_download)
+          TEACHERS="$TEACHERS" PARTS="$PARTS" python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          s = os.environ["SET"]
+          pats = [f"{s}/{t}/part_{int(p):03d}_*/*" for t in os.environ["TEACHERS"].split() for p in os.environ["PARTS"].split()]
+          snapshot_download(os.environ["CACHES_REPO"], repo_type="dataset", allow_patterns=pats, local_dir="data/caches")
+          PY
+          for t in $TEACHERS; do for p in $PARTS; do ls -d data/caches/$SET/$t/$(printf part_%03d $p)_* >/dev/null || { echo "missing cache $t part $p"; exit 1; }; done; done
           df -h . | tail -1
       - name: Train
         run: |
