@@ -4,6 +4,7 @@ name: diloco
 # Other machines (Kaggle, Colab, volunteers) can join the same run with `python -m opendino.diloco work`.
 #
 #   gh workflow run diloco.yml -f repo=nakas/opendino-run-pilot -f workers=4 -f hours=5
+# The run repo is created at round 0 from `config` on the first launch.
 #
 # Usage policy (GitHub Actions terms): bounded bursts, not a standing fleet. Default 4 runners,
 # hard maximum 8, at most one burst running at a time.
@@ -15,6 +16,7 @@ on:
       set: {description: "in100 | in1k", required: true, default: in100}
       workers: {description: "runners in this burst (1-8)", required: true, default: "4"}
       hours: {description: "hours per runner (max 5.5)", required: true, default: "5"}
+      config: {description: "config used only if the run repo is new", required: false, default: configs/diloco_in100_vits16.yaml}
 
 concurrency:
   group: diloco
@@ -37,8 +39,26 @@ jobs:
           echo "matrix={\"worker\":[$(seq -s, 0 $((W-1)))]}" >> "$GITHUB_OUTPUT"
           echo "W=$W"
 
+  init:
+    # Creates the run repo at round 0 if it does not exist yet; leaves an existing run untouched.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: {python-version: "3.12", cache: pip}
+      - name: Initialise run if new
+        env: {REPO: "${{ inputs.repo }}", CONFIG: "${{ inputs.config }}"}
+        run: |
+          pip install -q torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -q -e . huggingface_hub
+          if python -c "import os,sys; from opendino.diloco import Hub; sys.exit(0 if Hub(os.environ['REPO']).latest_round() >= 0 else 1)" 2>/dev/null; then
+            echo "$REPO already initialised; resuming"
+          else
+            python -m opendino.diloco init --config "$CONFIG" --repo "$REPO"
+          fi
+
   work:
-    needs: plan
+    needs: [plan, init]
     runs-on: ubuntu-latest
     timeout-minutes: 345
     strategy:

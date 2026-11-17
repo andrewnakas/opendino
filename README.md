@@ -38,7 +38,7 @@ and images are paired again. Teacher caches (features only) go to the public HF 
 ```bash
 gh workflow run swarm.yml -f stage=pca   -f set=in100 -f teacher=dinov2_l
 gh workflow run swarm.yml -f stage=cache -f set=in100 -f teacher=dinov2_l -f parts=20
-python -m opendino.diloco init --config configs/diloco_in100_vits16.yaml --repo nakas/opendino-run-pilot
+# first launch also creates the run repo (round 0) from configs/diloco_in100_vits16.yaml
 gh workflow run diloco.yml -f repo=nakas/opendino-run-pilot -f workers=4 -f hours=5
 ```
 
