@@ -62,6 +62,7 @@ jobs:
         run: |
           T='teachers={dinov2_s: {cache: [data/imagenette/cache_dinov2_s_g8_p0, data/imagenette/cache_dinov2_s_g8_p1]}}'
           python -m opendino.train --config configs/smoke_imagenette.yaml "$T" epochs=2 batch_size=32 warmup_steps=5 max_steps=10
+          set -o pipefail
           python -m opendino.train --config configs/smoke_imagenette.yaml "$T" epochs=2 batch_size=32 warmup_steps=5 | tee train.log
           grep -q "resumed from" train.log
           test -f runs/smoke/final.pt
