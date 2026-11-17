@@ -1,0 +1,61 @@
+name: eval
+
+# Frozen-feature k-NN and linear probe on ImageNet-100 on free GitHub CPU runners, one runner per backbone.
+# The probe's training set is a fixed subset of the train slices (same for every backbone), so numbers are
+# comparable to each other but lower than full-train-set numbers.
+#
+#   gh workflow run eval.yml -f backbones="diloco:nakas/opendino-run-pilot,timm:vit_small_patch16_dinov3.lvd1689m"
+#
+# Needs repo secret HF_TOKEN (gated ImageNet read).
+
+on:
+  workflow_dispatch:
+    inputs:
+      backbones: {description: "comma-separated specs: diloco:<repo>[@round], timm:<id>, teacher:<name>", required: true}
+      train_slices: {description: "which of the 20 train slices form the probe's training set", required: false, default: "0 7 14"}
+
+env:
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - id: plan
+        env: {B: "${{ inputs.backbones }}"}
+        run: |
+          python3 -c "import json,os; b=[x.strip() for x in os.environ['B'].split(',') if x.strip()]; print('matrix='+json.dumps({'backbone': b}))" >> "$GITHUB_OUTPUT"
+
+  eval:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: {python-version: "3.12", cache: pip}
+      - name: Install (CPU-only torch)
+        run: |
+          pip install -q torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -q -e . pyarrow huggingface_hub
+      - name: Rebuild probe data (ImageNet-100 val + train subset)
+        env: {SLICES: "${{ inputs.train_slices }}"}
+        run: |
+          python scripts/shards_from_hf.py --split validation --worker 0 --workers 1 --class-stride 10 \
+            --out data/val --cache-dir /tmp/hfcache
+          for p in $SLICES; do
+            python scripts/shards_from_hf.py --split train --worker "$p" --workers 20 --class-stride 10 \
+              --out "data/train_$p" --cache-dir /tmp/hfcache
+          done
+      - name: Evaluate
+        env: {BACKBONE: "${{ matrix.backbone }}", SLICES: "${{ inputs.train_slices }}"}
+        run: |
+          TRAIN=(); for p in $SLICES; do TRAIN+=("data/train_$p"); done
+          python -m opendino.eval --backbone "$BACKBONE" --train "${TRAIN[@]}" --val data/val | tee result.txt
+          echo "### $BACKBONE" >> "$GITHUB_STEP_SUMMARY"; tail -5 result.txt >> "$GITHUB_STEP_SUMMARY"

@@ -2,6 +2,7 @@
 
     python -m opendino.eval --backbone opendino:runs/x/last.pt --train data/train --val data/val
     python -m opendino.eval --backbone timm:vit_small_patch14_reg4_dinov2.lvd142m --train ... --val ...
+    python -m opendino.eval --backbone diloco:nakas/opendino-run-pilot@12 --train ... --val ...
 
 --train / --val are shard directories (scripts/make_shards.py). Every backbone is
 evaluated through the same code path so numbers are comparable to each other.
@@ -22,10 +23,21 @@ from opendino.teachers import TEACHERS, TimmBackbone
 from opendino.train import IMAGENET_MEAN, IMAGENET_STD
 
 
+def _diloco_checkpoint(arg: str):
+    """Returns (None, cfg, student_state) for a round of a DiLoCo run stored on the HF Hub."""
+    from opendino.diloco import Hub, load_cfg
+    repo, _, rnd = arg.partition("@")
+    hub = Hub(repo)
+    rnd = int(rnd) if rnd else hub.latest_round()
+    ck = hub.load(f"global/round_{rnd:05d}.pt")
+    state = {k[len("student."):]: v for k, v in ck["model"].items() if k.startswith("student.")}
+    print(f"loaded {repo} round {rnd}", flush=True)
+    return None, load_cfg(hub), state
+
+
 class StudentBackbone(nn.Module):
-    def __init__(self, ckpt_path: str | None = None, cfg: dict | None = None):
+    def __init__(self, ckpt_path: str | None = None, cfg: dict | None = None, state: dict | None = None):
         super().__init__()
-        state = None
         if ckpt_path:
             ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
             cfg, state = ck["cfg"], ck["student"]
@@ -51,6 +63,8 @@ def load_backbone(spec: str, grid: int | None = None) -> nn.Module:
     kind, _, arg = spec.partition(":")
     if kind == "opendino":
         return StudentBackbone(arg).eval()
+    if kind == "diloco":  # diloco:<hf repo>[@round] -> a global round of a DiLoCo run (latest by default)
+        return StudentBackbone(*_diloco_checkpoint(arg)).eval()
     if kind == "random":  # untrained student with the config of a checkpoint, as a floor
         return StudentBackbone(cfg=torch.load(arg, map_location="cpu", weights_only=False)["cfg"]).eval()
     if kind == "timm":
